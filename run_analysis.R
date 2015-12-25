@@ -1,40 +1,59 @@
-library(reshape2)
+# get the script working directory
+frame_files <- lapply(sys.frames(), function(x) x$ofile)
+frame_files <- Filter(Negate(is.null), frame_files)
+script_path <- dirname(frame_files[[length(frame_files)]])
 
-# get training data
-tr_x <- read.table("UCI HAR Dataset/train/X_train.txt")
-tr_y <- read.table("UCI HAR Dataset/train/y_train.txt")
-tr_subjects <- read.table("UCI HAR Dataset/train/subject_train.txt")
+# create variables where we will store our dataset
+temp_dir = tempdir()
+url_path = "https://d396qusza40orc.cloudfront.net/getdata%2Fprojectfiles%2FUCI%20HAR%20Dataset.zip"
+dest_zip_path = file.path(temp_dir, "data.zip")
+data_dir = file.path(script_path, "dataset")
+data_default_path = file.path(script_path, "UCI HAR Dataset")
+subject_name = "subject_%s.txt"
+x_name = "X_%s.txt"
+y_name = "y_%s.txt"
+labels_name = "activity_labels.txt"
+features_name = "features.txt"
+test = "test"
+train = "train"
 
-# get testing data
-te_x <- read.table("UCI HAR Dataset/test/X_test.txt")
-te_y <- read.table("UCI HAR Dataset/test/y_test.txt")
-te_subjects <- read.table("UCI HAR Dataset/test/subject_test.txt")
+# download if not there yet
+if(!file.exists(data_dir)) {
+  download.file(url_path, dest_zip_path, method='curl')
+  unzip(dest_zip_path, exdir = script_path)
+  file.rename(data_default_path, data_dir)
+}
 
-# get activity labels data
-a_labels <- read.table("UCI HAR Dataset/activity_labels.txt")
+require(dplyr)
 
-# get features data
-features <- read.table("UCI HAR Dataset/features.txt")
+# merges the training and the test sets to create one data set.
+s_test <- tbl_df(read.csv(file.path(data_dir, test, sprintf(subject_name, test)), header = FALSE, sep = ""))
+x_test <- tbl_df(read.csv(file.path(data_dir, test, sprintf(x_name, test)), header = FALSE, sep = ""))
+y_test <- tbl_df(read.csv(file.path(data_dir, test, sprintf(y_name, test)), header = FALSE, sep = ""))
 
-# tidy up datasets
-a_labels[,2] <- as.character(a_labels[,2])
-features[,2] <- as.character(features[,2])
-x_data <- rbind(tr_x, te_x)[, grep(".*mean.*|.*std.*", features[,2])]
-names(x_data) <- features[grep(".*mean.*|.*std.*", features[,2]), 2]
-y_data <- rbind(tr_y, te_y)
-y_data[, 1] <- a_labels[y_data[, 1], 2]
-names(y_data) <- "activity"
-s_data <- rbind(tr_subjects, te_subjects)
-names(s_data) <- "subjects"
+s_train <- tbl_df(read.csv(file.path(data_dir, train, sprintf(subject_name, train)), header = FALSE, sep = ""))
+x_train <- tbl_df(read.csv(file.path(data_dir, train, sprintf(x_name, train)), header = FALSE, sep = ""))
+y_train <- tbl_df(read.csv(file.path(data_dir, train, sprintf(y_name, train)), header = FALSE, sep = ""))
 
-# merge cleaned dataset
-dataset <- cbind(x_data, y_data, s_data)
+s_data <- bind_rows(s_train, s_test)
+x_data <- bind_rows(x_train, x_test)
+y_data <- bind_rows(y_train, y_test)
 
-# tidy up dataset
-dataset$activity <- factor(dataset$activity, levels = a_labels[,1], labels = a_labels[,2])
-dataset$subject <- as.factor(dataset$subject)
-dataset.melted <- melt(dataset, id = c("subject", "activity"))
-dataset.mean <- dcast(dataset.melted, subject + activity ~ variable, mean)
+data <- bind_cols(s_data, x_data, y_data)
 
-# export file
-write.table(dataset.mean, "tidy.txt", row.names = FALSE, quote = FALSE)
+# appropriately labels the data set with descriptive variable names
+features <- tbl_df(read.csv(file.path(data_dir, features_name), header = FALSE, sep = ""))
+names(data) <- str_replace(make.names(names=c("subject", as.character(features$V2), "activity"), unique=TRUE, allow_ = TRUE), "\\.+$", "")
+
+# extracts only the measurements on the mean and standard deviation for each measurement
+mstd <- data[,grep("subject|.*\\.mean\\..*|.*\\.std\\..*|activity", names(data))]
+
+# uses descriptive activity names to name the activities in the data set
+labels <- tbl_df(read.csv(file.path(data_dir, labels_name), header = FALSE, sep = ""))
+mstd <- mutate(mstd, activity = labels[activity,]$V2)
+
+# from the data set in last step, creates a second, independent tidy data set with the 
+# average of each variable for each activity and each subject
+tidy_set <- gather(mstd, variable, value, -subject, -activity)
+summary_tidy_set <- summarise(group_by(tidy_set, subject, activity, variable), mean(value))
+write.table(summary_tidy_set, "tidy.txt", row.names = FALSE, quote = FALSE)
